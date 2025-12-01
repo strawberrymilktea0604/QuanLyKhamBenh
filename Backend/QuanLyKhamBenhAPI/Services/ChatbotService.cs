@@ -1,9 +1,41 @@
+/*
+ * ChatbotService - Enhanced with Rate Limiting and Caching
+ * 
+ * Features implemented to prevent Gemini API quota exhaustion:
+ * 
+ * 1. RATE LIMITING:
+ *    - Sliding window rate limiter: 10 requests per minute
+ *    - Allows queuing up to 5 requests when limit is reached
+ *    - Prevents overwhelming the Gemini API
+ * 
+ * 2. RESPONSE CACHING:
+ *    - Caches responses for 30 minutes based on message hash and context
+ *    - Reduces API calls for similar questions
+ *    - Automatic cleanup of expired cache entries
+ * 
+ * 3. RETRY LOGIC:
+ *    - Exponential backoff retry (1s, 2s, 4s) for 429 errors
+ *    - Up to 3 retry attempts before giving up
+ *    - Graceful degradation with user-friendly messages
+ * 
+ * 4. SEQUENTIAL PROCESSING:
+ *    - Semaphore ensures only one request processed at a time
+ *    - Prevents parallel requests that could hit rate limits
+ *    - Maintains conversation context integrity
+ * 
+ * Usage: The service automatically handles rate limiting and caching.
+ * No changes needed in controller code.
+ */
+
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.ChatCompletion;
 using Microsoft.SemanticKernel.Connectors.Google;
 using QuanLyKhamBenhAPI.Models;
 using QuanLyKhamBenhAPI.Plugins;
 using System.Text.Json;
+using System.Collections.Concurrent;
+using System.Threading.RateLimiting;
+using System.Threading;
 
 namespace QuanLyKhamBenhAPI.Services;
 
@@ -12,6 +44,15 @@ public class ChatbotService
     private readonly Kernel _kernel;
     private readonly IChatCompletionService _chatService;
     private readonly ILogger<ChatbotService> _logger;
+    
+    // Rate limiting
+    private static readonly ConcurrentDictionary<string, RateLimiter> _rateLimiters = new();
+    private static readonly ConcurrentDictionary<string, string> _responseCache = new();
+    private static readonly TimeSpan _cacheExpiration = TimeSpan.FromMinutes(30);
+    private static readonly ConcurrentDictionary<string, DateTime> _cacheTimestamps = new();
+    
+    // Queue for sequential processing
+    private static readonly SemaphoreSlim _processingSemaphore = new(1, 1);
 
     public ChatbotService(
         IConfiguration configuration, 
@@ -57,50 +98,156 @@ public class ChatbotService
         PatientContextData? contextData = null,
         ChatHistory? history = null)
     {
+        // Rate limiting check
+        if (!await CheckRateLimitAsync("global"))
+        {
+            _logger.LogWarning("Rate limit exceeded for chatbot requests");
+            return "Xin lỗi, dịch vụ tư vấn đang bận. Vui lòng thử lại sau vài phút.";
+        }
+
+        // Check cache for similar messages
+        var cacheKey = GenerateCacheKey(userMessage, contextData);
+        if (_responseCache.TryGetValue(cacheKey, out var cachedResponse) && 
+            _cacheTimestamps.TryGetValue(cacheKey, out var cacheTime) &&
+            DateTime.UtcNow - cacheTime < _cacheExpiration)
+        {
+            _logger.LogInformation("Returning cached response for message: {Message}", userMessage);
+            return cachedResponse;
+        }
+
+        // Use semaphore to ensure sequential processing
+        await _processingSemaphore.WaitAsync();
         try
         {
-            // Tạo chat history mới nếu chưa có
-            history ??= new ChatHistory();
+            return await GetChatResponseInternalAsync(userMessage, contextData, history, cacheKey);
+        }
+        finally
+        {
+            _processingSemaphore.Release();
+        }
+    }
 
-            // Thêm system prompt với context data
-            if (history.Count == 0)
+    private async Task<string> GetChatResponseInternalAsync(
+        string userMessage, 
+        PatientContextData? contextData,
+        ChatHistory? history,
+        string cacheKey)
+    {
+        const int maxRetries = 3;
+        var retryDelay = TimeSpan.FromSeconds(1);
+
+        for (int attempt = 0; attempt < maxRetries; attempt++)
+        {
+            try
             {
-                var systemPrompt = BuildSystemPrompt(contextData);
-                history.AddSystemMessage(systemPrompt);
-            }
+                // Tạo chat history mới nếu chưa có
+                history ??= new ChatHistory();
 
-            // Thêm tin nhắn người dùng
-            history.AddUserMessage(userMessage);
+                // Thêm system prompt với context data
+                if (history.Count == 0)
+                {
+                    var systemPrompt = BuildSystemPrompt(contextData);
+                    history.AddSystemMessage(systemPrompt);
+                }
 
-            // Gọi Gemini với auto function calling enabled
+                // Thêm tin nhắn người dùng
+                history.AddUserMessage(userMessage);
+
+                // Gọi Gemini với auto function calling enabled
 #pragma warning disable SKEXP0070
-            var settings = new GeminiPromptExecutionSettings
-            {
-                ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions
-            };
+                var settings = new GeminiPromptExecutionSettings
+                {
+                    ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions
+                };
 #pragma warning restore SKEXP0070
 
-            var response = await _chatService.GetChatMessageContentAsync(
-                history, 
-                executionSettings: settings,
-                kernel: _kernel);
+                var response = await _chatService.GetChatMessageContentAsync(
+                    history, 
+                    executionSettings: settings,
+                    kernel: _kernel);
 
-            return response.Content ?? "Xin lỗi, tôi không thể trả lời câu hỏi này.";
+                var result = response.Content ?? "Xin lỗi, tôi không thể trả lời câu hỏi này.";
+                
+                // Cache the response
+                _responseCache[cacheKey] = result;
+                _cacheTimestamps[cacheKey] = DateTime.UtcNow;
+                
+                // Clean up old cache entries
+                CleanupCache();
+
+                return result;
+            }
+            catch (Microsoft.SemanticKernel.HttpOperationException httpEx) when (httpEx.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                _logger.LogWarning(httpEx, 
+                    "Rate limit hit on attempt {Attempt}/{MaxRetries}. Retrying in {Delay}s", 
+                    attempt + 1, maxRetries, retryDelay.TotalSeconds);
+                
+                if (attempt < maxRetries - 1)
+                {
+                    await Task.Delay(retryDelay);
+                    retryDelay = retryDelay * 2; // Exponential backoff
+                    continue;
+                }
+                
+                return "Xin lỗi, dịch vụ tư vấn đang quá tải. Vui lòng thử lại sau.";
+            }
+            catch (Microsoft.SemanticKernel.HttpOperationException httpEx)
+            {
+                _logger.LogError(httpEx, 
+                    "HTTP Error calling Gemini - StatusCode: {StatusCode}, Message: {Message}, RequestUri: {RequestUri}", 
+                    httpEx.StatusCode, 
+                    httpEx.Message,
+                    httpEx.InnerException?.Message ?? "N/A");
+                return "Xin lỗi, dịch vụ tư vấn tạm thời không khả dụng. Vui lòng thử lại sau.";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting chat response from Gemini: {ExceptionType} - {Message}", 
+                    ex.GetType().Name, ex.Message);
+                return "Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại sau.";
+            }
         }
-        catch (Microsoft.SemanticKernel.HttpOperationException httpEx)
+
+        return "Xin lỗi, dịch vụ tư vấn không khả dụng. Vui lòng thử lại sau.";
+    }
+
+    private async Task<bool> CheckRateLimitAsync(string identifier)
+    {
+        var rateLimiter = _rateLimiters.GetOrAdd(identifier, _ => 
+            new SlidingWindowRateLimiter(new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = 10, // 10 requests
+                Window = TimeSpan.FromMinutes(1), // per minute
+                SegmentsPerWindow = 6, // 6 segments of 10 seconds each
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 5 // Allow up to 5 queued requests
+            }));
+
+        var lease = await rateLimiter.AcquireAsync(1);
+        return lease.IsAcquired;
+    }
+
+    private string GenerateCacheKey(string userMessage, PatientContextData? contextData)
+    {
+        // Create a simple hash of the message and context for caching
+        var contextHash = contextData != null ? 
+            JsonSerializer.Serialize(contextData).GetHashCode().ToString() : "no-context";
+        return $"{userMessage.GetHashCode()}_{contextHash}";
+    }
+
+    private void CleanupCache()
+    {
+        var now = DateTime.UtcNow;
+        var expiredKeys = _cacheTimestamps
+            .Where(kvp => now - kvp.Value > _cacheExpiration)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var key in expiredKeys)
         {
-            _logger.LogError(httpEx, 
-                "HTTP Error calling Gemini - StatusCode: {StatusCode}, Message: {Message}, RequestUri: {RequestUri}", 
-                httpEx.StatusCode, 
-                httpEx.Message,
-                httpEx.InnerException?.Message ?? "N/A");
-            return "Xin lỗi, dịch vụ tư vấn tạm thời không khả dụng. Vui lòng thử lại sau.";
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting chat response from Gemini: {ExceptionType} - {Message}", 
-                ex.GetType().Name, ex.Message);
-            return "Xin lỗi, đã có lỗi xảy ra. Vui lòng thử lại sau.";
+            _responseCache.TryRemove(key, out _);
+            _cacheTimestamps.TryRemove(key, out _);
         }
     }
 

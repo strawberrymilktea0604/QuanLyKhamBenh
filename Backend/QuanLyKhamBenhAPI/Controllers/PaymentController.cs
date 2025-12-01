@@ -108,16 +108,8 @@ namespace QuanLyKhamBenhAPI.Controllers
                 payment.TotalAmount = dto.FinalAmount.Value;
             }
 
-            payment.Status = "Paid";
-
-            // Update appointment status to completed if payment is confirmed
-            if (payment.Appointment != null)
-            {
-                payment.Appointment.Status = "Completed";
-            }
-
-            // Add loyalty points (1 point per 10,000 VND) based on final amount
-            if (payment.Appointment != null && payment.Appointment.PatientId.HasValue)
+            // Only add loyalty points if payment was not already paid
+            if (payment.Status != "Paid" && payment.Appointment != null && payment.Appointment.PatientId.HasValue)
             {
                 int pointsToAdd = (int)(payment.TotalAmount / 10000);
                 
@@ -139,6 +131,14 @@ namespace QuanLyKhamBenhAPI.Controllers
                     loyaltyPoint.Points = (loyaltyPoint.Points ?? 0) + pointsToAdd;
                     loyaltyPoint.LastUpdated = DateTime.Now;
                 }
+            }
+
+            payment.Status = "Paid";
+
+            // Update appointment status to completed if payment is confirmed
+            if (payment.Appointment != null)
+            {
+                payment.Appointment.Status = "Completed";
             }
 
             await _context.SaveChangesAsync();

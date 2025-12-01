@@ -21,7 +21,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   Map<String, dynamic>? _paymentInfo;
   bool _isLoading = true;
   String? _error;
-  String _selectedMethod = 'Cash';
+  String _selectedMethod = 'VNPAY';
   bool _isProcessing = false;
 
   // Promo code states
@@ -32,10 +32,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
   int _loyaltyPoints = 0;
 
   final List<Map<String, dynamic>> _paymentMethods = [
-    {'value': 'Cash', 'label': 'Tiền mặt', 'icon': Icons.money},
-    {'value': 'Card', 'label': 'Thẻ tín dụng', 'icon': Icons.credit_card},
-    {'value': 'Transfer', 'label': 'Chuyển khoản', 'icon': Icons.account_balance},
-    {'value': 'MoMo', 'label': 'Ví MoMo', 'icon': Icons.wallet},
+    {'value': 'VNPAY', 'label': 'Thanh toán qua VNPAY', 'icon': Icons.payment, 'color': Colors.blue},
+    {'value': 'Momo', 'label': 'Thanh toán qua Momo', 'icon': Icons.wallet, 'color': Colors.pink},
+    {'value': 'Cash', 'label': 'Thẻ Tín dụng/Ghi nợ', 'icon': Icons.credit_card, 'color': Colors.grey},
   ];
 
   @override
@@ -127,19 +126,29 @@ class _PaymentScreenState extends State<PaymentScreen> {
       final authService = Provider.of<AuthService>(context, listen: false);
       final finalAmount = _getFinalAmount();
 
-      // Create payment with final amount
-      final paymentId = await _patientService.createPayment(
-        authService.token!,
-        widget.appointmentId,
-        _selectedMethod,
-        finalAmount, // Send final amount instead of hardcoded
-      );
+      // Check if payment already exists
+      final existingPayment = _paymentInfo!['payment'];
+      int? paymentId;
+
+      if (existingPayment != null && existingPayment['paymentId'] != null) {
+        // Payment already exists, just confirm it with final amount
+        paymentId = existingPayment['paymentId'];
+      } else {
+        // Create new payment
+        paymentId = await _patientService.createPayment(
+          authService.token!,
+          widget.appointmentId,
+          _selectedMethod,
+          finalAmount,
+        );
+      }
 
       if (paymentId != null) {
-        // Confirm payment
+        // Confirm payment with final amount
         final confirmSuccess = await _patientService.confirmPayment(
           authService.token!,
           paymentId,
+          finalAmount: finalAmount, // Pass final amount for discount update
         );
 
         if (mounted) {
@@ -338,15 +347,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
               color: Color(0xFFFFA000),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(
+            child: const Icon(
               Icons.star,
               color: Colors.white,
               size: 24,
             ),
           ),
-          SizedBox(width: 16),
+          const SizedBox(width: 16),
           Expanded(
-            child: Column(
+            child: const Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
@@ -372,13 +381,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
             children: [
               Text(
                 '$_loyaltyPoints',
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.bold,
                   color: Color(0xFFFF6F00),
                 ),
               ),
-              Text(
+              const Text(
                 'điểm',
                 style: TextStyle(
                   fontSize: 12,
@@ -490,7 +499,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Phương thức thanh toán',
+            'Chọn Phương thức Thanh toán',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
@@ -513,32 +522,44 @@ class _PaymentScreenState extends State<PaymentScreen> {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF1E88E5).withValues(alpha: 0.1) : Colors.grey[50],
+          color: isSelected ? method['color'].withValues(alpha: 0.1) : Colors.grey[50],
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? const Color(0xFF1E88E5) : Colors.grey[300]!,
+            color: isSelected ? method['color'] : Colors.grey[300]!,
             width: 2,
           ),
         ),
         child: Row(
           children: [
-            Icon(
-              method['icon'],
-              color: isSelected ? const Color(0xFF1E88E5) : Colors.grey[600],
-              size: 24,
-            ),
-            const SizedBox(width: 16),
-            Text(
-              method['label'],
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? const Color(0xFF1E88E5) : Colors.black87,
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: method['color'],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                method['icon'],
+                color: Colors.white,
+                size: 24,
               ),
             ),
-            const Spacer(),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                method['label'],
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                  color: isSelected ? method['color'] : Colors.black87,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+            const SizedBox(width: 8),
             if (isSelected)
-              const Icon(Icons.check_circle, color: Color(0xFF1E88E5), size: 24),
+              Icon(Icons.check_circle, color: method['color'], size: 24),
           ],
         ),
       ),

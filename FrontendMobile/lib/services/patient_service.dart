@@ -49,6 +49,26 @@ class PatientService {
     }
   }
 
+  Future<Map<String, dynamic>> getPaymentInfo(String token, int appointmentId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('${ApiConfig.baseUrl}/booking/appointments/$appointmentId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception('Failed to load payment info: ${response.statusCode}');
+      }
+    } catch (e) {
+      throw Exception('Error getting payment info: $e');
+    }
+  }
+
   Future<int?> createPayment(String token, int appointmentId, String paymentMethod, double totalAmount) async {
     try {
       final response = await http.post(
@@ -66,7 +86,10 @@ class PatientService {
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final data = jsonDecode(response.body);
-        return data['paymentId'];
+        final paymentId = data['paymentId'];
+        if (paymentId != null && paymentId is int && paymentId > 0) {
+          return paymentId;
+        }
       }
       return null;
     } catch (e) {
@@ -74,17 +97,33 @@ class PatientService {
     }
   }
 
-  Future<bool> confirmPayment(String token, int paymentId) async {
+  Future<bool> confirmPayment(String token, int paymentId, {double? finalAmount}) async {
     try {
+      final body = finalAmount != null ? jsonEncode({'finalAmount': finalAmount}) : null;
+      
       final response = await http.put(
         Uri.parse('${ApiConfig.baseUrl}/payment/confirm/$paymentId'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
+        body: body,
       );
 
-      return response.statusCode == 200;
+      if (response.statusCode == 200) {
+        try {
+          final data = jsonDecode(response.body);
+          // Check if response contains success indicator
+          final isSuccess = data['success'] == true ||
+                           data['message']?.toLowerCase().contains('success') == true ||
+                           data['message']?.contains('thành công') == true;
+          return isSuccess;
+        } catch (e) {
+          // If can't parse JSON, assume success based on status code
+          return true;
+        }
+      }
+      return false;
     } catch (e) {
       throw Exception('Error confirming payment: $e');
     }
@@ -113,18 +152,14 @@ class PatientService {
   Future<bool> hasReview(String token, int appointmentId) async {
     try {
       final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/feedback/check/$appointmentId'),
+        Uri.parse('${ApiConfig.baseUrl}/feedback/review/$appointmentId'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',
         },
       );
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data['hasReview'] ?? false;
-      }
-      return false;
+      return response.statusCode == 200;
     } catch (e) {
       return false;
     }
@@ -171,26 +206,6 @@ class PatientService {
     }
   }
 
-  Future<Map<String, dynamic>> getPaymentInfo(String token, int appointmentId) async {
-    try {
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/booking/appointments/$appointmentId'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        return jsonDecode(response.body);
-      } else {
-        throw Exception('Failed to load payment info: ${response.statusCode}');
-      }
-    } catch (e) {
-      throw Exception('Error getting payment info: $e');
-    }
-  }
-
   Future<Map<String, dynamic>> validatePromoCode(String token, String promoCode) async {
     try {
       final response = await http.get(
@@ -216,7 +231,7 @@ class PatientService {
   Future<Map<String, dynamic>> getReview(String token, int appointmentId) async {
     try {
       final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}/feedback/appointment/$appointmentId'),
+        Uri.parse('${ApiConfig.baseUrl}/feedback/review/$appointmentId'),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $token',

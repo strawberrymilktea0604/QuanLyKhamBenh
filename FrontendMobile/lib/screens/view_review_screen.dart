@@ -44,6 +44,14 @@ class _ViewReviewScreenState extends State<ViewReviewScreen> {
         });
       }
     } catch (e) {
+      // If review doesn't exist, navigate to review screen instead
+      if (e.toString().contains('Failed to load review: 404')) {
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/review', arguments: widget.appointmentId);
+        }
+        return;
+      }
+      
       if (mounted) {
         setState(() {
           _error = e.toString();

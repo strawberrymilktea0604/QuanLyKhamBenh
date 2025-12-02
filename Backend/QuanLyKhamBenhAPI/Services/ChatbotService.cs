@@ -1,6 +1,8 @@
 /*
  * ChatbotService - Enhanced with Rate Limiting and Caching
  * 
+ * Current Model: Gemini 2.0 Flash Lite
+ * 
  * Features implemented to prevent Gemini API quota exhaustion:
  * 
  * 1. RATE LIMITING:
@@ -74,9 +76,9 @@ public class ChatbotService
         try
         {
             builder.AddGoogleAIGeminiChatCompletion(
-                modelId: "gemini-2.0-flash-exp",
+                modelId: "gemini-2.0-flash-lite",
                 apiKey: geminiApiKey);
-            _logger.LogInformation("Successfully configured Gemini model: gemini-2.0-flash-exp");
+            _logger.LogInformation("Successfully configured Gemini model: gemini-2.0-flash-lite");
         }
         catch (Exception ex)
         {
@@ -95,6 +97,7 @@ public class ChatbotService
 
     public async Task<string> GetChatResponseAsync(
         string userMessage, 
+        int? patientId = null,
         PatientContextData? contextData = null,
         ChatHistory? history = null)
     {
@@ -105,21 +108,22 @@ public class ChatbotService
             return "Xin lỗi, dịch vụ tư vấn đang bận. Vui lòng thử lại sau vài phút.";
         }
 
-        // Check cache for similar messages
-        var cacheKey = GenerateCacheKey(userMessage, contextData);
-        if (_responseCache.TryGetValue(cacheKey, out var cachedResponse) && 
-            _cacheTimestamps.TryGetValue(cacheKey, out var cacheTime) &&
-            DateTime.UtcNow - cacheTime < _cacheExpiration)
-        {
-            _logger.LogInformation("Returning cached response for message: {Message}", userMessage);
-            return cachedResponse;
-        }
+        // TẮT CACHE để luôn lấy dữ liệu mới từ database
+        // Cache gây ra vấn đề: dữ liệu cũ được lưu 30 phút, không realtime
+        // var cacheKey = GenerateCacheKey(userMessage, patientId);
+        // if (_responseCache.TryGetValue(cacheKey, out var cachedResponse) && 
+        //     _cacheTimestamps.TryGetValue(cacheKey, out var cacheTime) &&
+        //     DateTime.UtcNow - cacheTime < _cacheExpiration)
+        // {
+        //     _logger.LogInformation("Returning cached response for message: {Message}", userMessage);
+        //     return cachedResponse;
+        // }
 
         // Use semaphore to ensure sequential processing
         await _processingSemaphore.WaitAsync();
         try
         {
-            return await GetChatResponseInternalAsync(userMessage, contextData, history, cacheKey);
+            return await GetChatResponseInternalAsync(userMessage, patientId, contextData, history, null);
         }
         finally
         {
@@ -129,6 +133,7 @@ public class ChatbotService
 
     private async Task<string> GetChatResponseInternalAsync(
         string userMessage, 
+        int? patientId,
         PatientContextData? contextData,
         ChatHistory? history,
         string cacheKey)
@@ -146,7 +151,7 @@ public class ChatbotService
                 // Thêm system prompt với context data
                 if (history.Count == 0)
                 {
-                    var systemPrompt = BuildSystemPrompt(contextData);
+                    var systemPrompt = BuildSystemPrompt(patientId, contextData);
                     history.AddSystemMessage(systemPrompt);
                 }
 
@@ -157,7 +162,10 @@ public class ChatbotService
 #pragma warning disable SKEXP0070
                 var settings = new GeminiPromptExecutionSettings
                 {
-                    ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions
+                    ToolCallBehavior = GeminiToolCallBehavior.AutoInvokeKernelFunctions,
+                    Temperature = 0.4,  // Giảm xuống để câu trả lời ngắn gọn, ít "suy nghĩ" hơn
+                    TopP = 0.9,         // Giảm đa dạng để tập trung vào thông tin chính
+                    MaxTokens = 300     // Giới hạn nghiêm ngặt hơn để tránh dài dòng
                 };
 #pragma warning restore SKEXP0070
 
@@ -168,12 +176,13 @@ public class ChatbotService
 
                 var result = response.Content ?? "Xin lỗi, tôi không thể trả lời câu hỏi này.";
                 
-                // Cache the response
-                _responseCache[cacheKey] = result;
-                _cacheTimestamps[cacheKey] = DateTime.UtcNow;
-                
-                // Clean up old cache entries
-                CleanupCache();
+                // TẮT CACHE để đảm bảo dữ liệu realtime
+                // if (!string.IsNullOrEmpty(cacheKey))
+                // {
+                //     _responseCache[cacheKey] = result;
+                //     _cacheTimestamps[cacheKey] = DateTime.UtcNow;
+                //     CleanupCache();
+                // }
 
                 return result;
             }
@@ -228,12 +237,11 @@ public class ChatbotService
         return lease.IsAcquired;
     }
 
-    private string GenerateCacheKey(string userMessage, PatientContextData? contextData)
+    private string GenerateCacheKey(string userMessage, int? patientId)
     {
-        // Create a simple hash of the message and context for caching
-        var contextHash = contextData != null ? 
-            JsonSerializer.Serialize(contextData).GetHashCode().ToString() : "no-context";
-        return $"{userMessage.GetHashCode()}_{contextHash}";
+        // Create a simple hash of the message and patient ID for caching
+        var patientHash = patientId?.ToString() ?? "no-patient";
+        return $"{userMessage.GetHashCode()}_{patientHash}";
     }
 
     private void CleanupCache()
@@ -251,33 +259,108 @@ public class ChatbotService
         }
     }
 
-    private string BuildSystemPrompt(PatientContextData? contextData)
+    private string BuildSystemPrompt(int? patientId, PatientContextData? contextData)
     {
-        var prompt = @"Bạn là trợ lý ảo thông minh của Phòng Khám Evergreen Health.
+        var sb = new System.Text.StringBuilder();
+        
+        sb.AppendLine("Bạn là trợ lý ảo thông minh của Phòng Khám Đa Khoa.");
+        sb.AppendLine();
+        sb.AppendLine("# QUY TẮC QUAN TRỌNG NHẤT:");
+        sb.AppendLine("- KHI GỌI FUNCTION: IM LẶNG HOÀN TOÀN, KHÔNG NÓI GÌ CHO ĐẾN KHI CÓ KẾT QUẢ");
+        sb.AppendLine("- CHỈ TRẢ LỜI DUY NHẤT 1 LẦN với thông tin đầy đủ từ kết quả function");
+        sb.AppendLine("- TUYỆT ĐỐI KHÔNG nói: Em sẽ kiểm tra, Em sẽ xem, Chờ em nhé");
+        sb.AppendLine();
+        sb.AppendLine("# CÁCH TRẢ LỜI:");
+        sb.AppendLine("- Trả lời NGẮN GỌN (2-3 câu), thân thiện, tự nhiên");
+        sb.AppendLine("- Xưng hô: Em (bot) - Anh/Chị (bệnh nhân)");
+        sb.AppendLine("- Sử dụng emoji phù hợp");
+        sb.AppendLine("- GỌI FUNCTION IM LẶNG → ĐỢI KẾT QUẢ → TRẢ LỜI 1 LẦN");
+        sb.AppendLine();
+        sb.AppendLine("# KHI NÀO GỌI FUNCTION:");
+        sb.AppendLine("- Hỏi về LỊCH HẸN/LỊCH KHÁM → LUÔN gọi LayLichHenSapToiAsync(patientId)");
+        sb.AppendLine("- Hỏi về LỊCH SỬ KHÁM → LUÔN gọi LayLichSuKhamAsync(patientId)");
+        sb.AppendLine("- Hỏi về KẾT QUẢ XÉT NGHIỆM → LUÔN gọi TraKetQuaXetNghiemAsync(patientId)");
+        sb.AppendLine("- Hỏi về BÁC SĨ/CHUYÊN KHOA → LUÔN gọi LayDanhSachBacSiAsync(chuyenKhoa)");
+        sb.AppendLine("- Hỏi về DỊCH VỤ Y TẾ/GIÁ KHÁM → LUÔN gọi TimDichVuKhamAsync('dịch vụ')");
+        sb.AppendLine("- Hỏi về ĐIỂM TÍCH LŨY → LUÔN gọi LayDiemTichLuyAsync(patientId)");
+        sb.AppendLine();
+        sb.AppendLine("QUAN TRỌNG: Khi user hỏi về 'dịch vụ y tế', PHẢI gọi TimDichVuKhamAsync với keyword='dịch vụ'");
+        sb.AppendLine();
+        sb.AppendLine("# VÍ DỤ TRẢ LỜI ĐÚNG:");
+        sb.AppendLine("User: tôi có lịch khám nào sắp tới không?");
+        sb.AppendLine("Bot: Chào anh! Anh có lịch khám ngày 4/12/2025 lúc 10:30 với BS Quách Minh Phương - Nha khoa. Nhớ đến đúng giờ nhé!");
+        sb.AppendLine();
+        sb.AppendLine("User: kết quả xét nghiệm của tôi thế nào?");
+        sb.AppendLine("Bot: Em thấy anh có kết quả xét nghiệm máu ngày 1/12/2025: Các chỉ số bình thường. Anh yên tâm nhé!");
+        sb.AppendLine();
+        sb.AppendLine("User: dịch vụ y tế có gì?");
+        sb.AppendLine("Bot: Phòng khám có các dịch vụ: Khám tổng quát (200.000đ), Khám chuyên khoa (300.000đ). Anh quan tâm dịch vụ nào ạ?");
+        sb.AppendLine();
+        sb.AppendLine("# SAI LẦM CẦN TRÁNH:");
+        sb.AppendLine("KHÔNG nói: Em sẽ xem lịch hẹn sắp tới của anh nhé");
+        sb.AppendLine("KHÔNG nói: Chờ em kiểm tra cho anh");
+        sb.AppendLine("CHỈ TRẢ LỜI 1 LẦN với kết quả cụ thể sau khi đã gọi function");
 
-**Nhiệm vụ:** Tư vấn cho bệnh nhân dựa trên dữ liệu hồ sơ được cung cấp.
-
-**Quy tắc ứng xử:**
-1. Trả lời ngắn gọn, thân thiện, xưng hô là 'Em' (trợ lý) và 'Anh/Chị' (bệnh nhân).
-2. Dựa vào lịch sử khám để gợi ý. Luôn nhắc lại thông tin từ hồ sơ khi có liên quan.
-3. **CẢNH BÁO QUAN TRỌNG:** Nếu bệnh nhân hỏi về triệu chứng nguy hiểm (đau ngực, khó thở, chảy máu nhiều, v.v.), hãy khuyên họ đến gặp bác sĩ hoặc cấp cứu NGAY LẬP TỨC, KHÔNG tự ý kê đơn thuốc.
-4. Nếu họ muốn đặt lịch, hãy hướng dẫn họ vào mục 'Đặt lịch khám' trên ứng dụng.
-5. Không được đưa ra chẩn đoán y khoa. Chỉ đưa ra thông tin tham khảo.
-6. Luôn khuyến khích bệnh nhân gặp bác sĩ để được tư vấn chuyên sâu.
-
-**Ngôn ngữ:** Tiếng Việt, tự nhiên và dễ hiểu.";
-
-        if (contextData != null)
+        if (patientId.HasValue)
         {
-            prompt += "\n\n**Dữ liệu bệnh nhân:**\n";
-            prompt += JsonSerializer.Serialize(contextData, new JsonSerializerOptions 
-            { 
-                WriteIndented = true,
-                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-            });
+            sb.AppendLine();
+            sb.AppendLine("# THÔNG TIN QUAN TRỌNG:");
+            sb.AppendLine($"- Patient ID của bệnh nhân hiện tại: {patientId.Value}");
+            sb.AppendLine($"- LUÔN LUÔN sử dụng Patient ID này khi gọi các function");
+            sb.AppendLine($"- Ví dụ: LayLichHenSapToiAsync({patientId.Value}), LayDiemTichLuyAsync({patientId.Value})");
         }
 
-        return prompt;
+        return sb.ToString();
+    }
+
+    private string FormatContextData(PatientContextData contextData)
+    {
+        var sb = new System.Text.StringBuilder();
+        
+        if (!string.IsNullOrEmpty(contextData.Ten))
+        {
+            sb.AppendLine($"- Họ tên: {contextData.Ten}");
+        }
+        
+        if (contextData.Tuoi.HasValue)
+        {
+            sb.AppendLine($"- Tuổi: {contextData.Tuoi}");
+        }
+        
+        if (!string.IsNullOrEmpty(contextData.GioiTinh))
+        {
+            sb.AppendLine($"- Giới tính: {contextData.GioiTinh}");
+        }
+
+        if (contextData.LichHenSapToi != null)
+        {
+            sb.AppendLine($"\n📅 Lịch hẹn sắp tới:");
+            sb.AppendLine($"  - Ngày: {contextData.LichHenSapToi.Ngay} lúc {contextData.LichHenSapToi.Gio}");
+            sb.AppendLine($"  - Bác sĩ: {contextData.LichHenSapToi.BacSi}");
+            sb.AppendLine($"  - Chuyên khoa: {contextData.LichHenSapToi.ChuyenKhoa}");
+        }
+
+        if (contextData.LichSuKham?.Any() == true)
+        {
+            sb.AppendLine($"\n🏥 Lịch sử khám gần nhất:");
+            var recentVisits = contextData.LichSuKham.Take(3);
+            foreach (var visit in recentVisits)
+            {
+                sb.AppendLine($"  - {visit.Ngay}: {visit.ChuyenKhoa} - BS {visit.BacSi}");
+                if (!string.IsNullOrEmpty(visit.ChanDoan))
+                {
+                    sb.AppendLine($"    Chẩn đoán: {visit.ChanDoan}");
+                }
+            }
+        }
+
+        if (contextData.ChuyenKhoaCuaPhongKham?.Any() == true)
+        {
+            sb.AppendLine($"\n🏥 Chuyên khoa có tại phòng khám:");
+            sb.AppendLine($"  {string.Join(", ", contextData.ChuyenKhoaCuaPhongKham)}");
+        }
+
+        return sb.ToString();
     }
 }
 

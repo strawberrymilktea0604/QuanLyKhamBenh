@@ -54,17 +54,12 @@ public class ChatbotController : ControllerBase
                 return Unauthorized();
             }
 
-            // Lấy context data nếu là bệnh nhân
-            PatientContextData? contextData = null;
-            if (userAccount.PatientId.HasValue)
-            {
-                contextData = await GetPatientContextAsync(userAccount.PatientId.Value);
-            }
-
-            // Gọi chatbot service
+            // Gọi chatbot service với patientId để AI có thể gọi plugin
+            // KHÔNG truyền context data để bắt buộc AI phải gọi plugin lấy dữ liệu mới
             var response = await _chatbotService.GetChatResponseAsync(
                 request.Message, 
-                contextData);
+                userAccount.PatientId,
+                null); // Không truyền contextData để AI luôn gọi plugin
 
             return Ok(new ChatResponse
             {

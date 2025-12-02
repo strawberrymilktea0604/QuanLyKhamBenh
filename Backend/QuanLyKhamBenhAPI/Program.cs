@@ -24,6 +24,9 @@ builder.Services.AddScoped<IUserRepository, UserRepository>();
 // Chatbot Service
 builder.Services.AddScoped<ChatbotService>();
 
+// Backup/Restore Service
+builder.Services.AddScoped<IBackupRestoreService, BackupRestoreService>();
+
 // JWT Configuration
 var jwtSecret = builder.Configuration["Jwt:Secret"] ?? "YourSecretKeyHere";
 var key = Encoding.ASCII.GetBytes(jwtSecret);

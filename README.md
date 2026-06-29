@@ -1,11 +1,11 @@
 # HỆ THỐNG QUẢN LÝ PHÒNG KHÁM ĐA NỀN TẢNG (CLINIC MANAGEMENT SYSTEM)
 
 [![HUIT](https://img.shields.io/badge/HUIT-Khoa%20CNTT-blue)](https://huit.edu.vn)
-[![Backend](https://img.shields.io/badge/Backend-.NET%208.0%20Core-green)](#)
-[![Web](https://img.shields.io/badge/Frontend%20Web-Next.js%2016-orange)](#)
-[![Mobile](https://img.shields.io/badge/Frontend%20Mobile-Flutter%203.24-blue)](#)
-[![Database](https://img.shields.io/badge/Database-SQL%20Server%202022-red)](#)
-[![AI](https://img.shields.io/badge/AI%20Chatbot-Google%20Gemini-violet)](#)
+[![Backend](https://img.shields.io/badge/Backend-.NET%208.0%20Core-green?logo=dotnet&logoColor=white)](#)
+[![Web](https://img.shields.io/badge/Frontend%20Web-Next.js%2016-orange?logo=nextdotjs&logoColor=white)](#)
+[![Mobile](https://img.shields.io/badge/Frontend%20Mobile-Flutter%203.24-blue?logo=flutter&logoColor=white)](#)
+[![Database](https://img.shields.io/badge/Database-SQL%20Server%202022-red?logo=microsoftsqlserver&logoColor=white)](#)
+[![AI](https://img.shields.io/badge/AI%20Chatbot-Google%20Gemini-violet?logo=googlegemini&logoColor=white)](#)
 
 ---
 

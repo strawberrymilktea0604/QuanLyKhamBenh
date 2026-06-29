@@ -33,9 +33,9 @@ Hiện nay, việc vận hành phòng khám vừa và nhỏ ở Việt Nam vẫn
 ### Demo hình ảnh thực tế từ hệ thống
 Dưới đây là một số hình ảnh thực tế từ giao diện hệ thống mà tụi em đã chụp lại trong báo cáo khóa luận:
 
-| Giao diện Đăng nhập (Web) | Giao diện Đặt lịch khám (Mobile) | Chatbot AI Tư vấn (Mobile & Web) |
+| Giao diện Đăng nhập (Web) | Giao diện Đặt lịch khám (Web) | Chatbot AI Tư vấn (Mobile) |
 | :---: | :---: | :---: |
-| ![Đăng nhập](./docs/images/ui_test_login.png) | ![Đặt lịch khám](./docs/images/ui_test_booking.png) | ![Chatbot AI](./docs/images/ui_test_chatbot.png) |
+| ![Đăng nhập](./docs/images/ui_test_login.png) | ![Đặt lịch khám](./docs/images/ui_design_booking.png) | ![Chatbot AI](./docs/images/ui_test_chatbot.png) |
 
 ---
 
@@ -86,7 +86,7 @@ graph TD
 Hệ thống quản lý cơ sở dữ liệu quan hệ được thiết kế trực tiếp trên SQL Server với các bảng chính như: `UserAccount`, `Patient`, `Doctor`, `Appointment`, `MedicalRecord`, `Service`, `LabResult`, `Payment`, `Feedback`, `WorkShift`, `LoyaltyPoints`, và `Promotion`.
 
 *   **Sơ đồ ERD chi tiết trong SQL Server:**
-    ![ERD](./docs/images/db_erd.png)
+    ![ERD](./docs/images/db_sqlserver.png)
 *   **Sơ đồ lớp ở mức thiết kế (Design Class Diagram):**
     ![Class Design](./docs/images/class_design.png)
 
